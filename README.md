@@ -38,6 +38,7 @@ waybar-autohide
 Add to your Hyprland config to start on launch:
 
 ```
+env = WAYBAR_AUTOHIDE_MONITORS,1
 exec-once = waybar-autohide
 ```
 
