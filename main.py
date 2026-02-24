@@ -1,4 +1,93 @@
 #!/usr/bin/env python
+"""
+waybar-autohide — Hyprland Waybar autohide controller
+======================================================
+
+Hides Waybar when windows overlap the bar area, shows it when the cursor
+approaches the top of the screen or no windows overlap. Designed for Hyprland
+on Wayland.
+
+HOW IT WORKS
+------------
+The main loop polls Hyprland every WAYBAR_AUTOHIDE_REFRESH_RATE seconds and
+computes the desired WaybarState (VISIBLE or HIDDEN) based on two signals:
+
+  1. Cursor proximity: if the cursor is within BAR_HEIGHT px of the top of any
+     tracked monitor, show the bar.
+  2. Window overlap: if any mapped, non-hidden, non-fullscreen window on an
+     active workspace has its top edge within (BAR_HEIGHT + HEIGHT_THRESHOLD)
+     px of y=0, hide the bar.
+
+Visibility is controlled via SIGUSR1 (hide) and SIGUSR2 (show), which Waybar
+responds to natively via its on-sigusr1/on-sigusr2 config keys.
+
+MONITOR ADD / LID OPEN BUG AND FIX
+------------------------------------
+When a new monitor is added (e.g. opening a laptop lid while docked), Hyprland
+fires a monitoradded IPC event and Waybar restarts to spawn a bar instance on
+the new output. Without special handling, this causes a blank screen on the
+newly-enabled display. The root cause is Hyprland's solitary/direct-scanout
+optimization: when the only compositor surface on an output is a single window
+(i.e. Waybar's layer surface has been collapsed by SIGUSR1), Hyprland attempts
+direct scanout on that output. If the monitor was just added and the compositor
+hasn't fully initialized it, the output shows nothing.
+
+The fix uses a two-phase grace mechanism driven by Hyprland's IPC event stream:
+
+  Phase 1 — monitoradded / monitoraddedv2:
+    Set _monitor_grace = True. The main loop returns VISIBLE unconditionally,
+    keeping Waybar's layer surface alive on all outputs while Hyprland
+    initializes the new display.
+
+  Phase 2 — openlayer>>waybar:
+    Hyprland emits this event exactly when Waybar has successfully created its
+    layer surface on the new output. This is the precise moment it is safe to
+    resume normal autohide logic. We clear _monitor_grace and set _force_resync.
+
+  Force resync:
+    When grace clears, we can't simply rely on next_state != state to re-send
+    the hide/show signal, because the script's internal state variable may
+    already show HIDDEN from before the lid opened. If Waybar restarted
+    mid-grace and the SIGUSR1 signal was lost, Waybar would be physically
+    visible while the script thinks it's hidden — and would never re-send the
+    signal. _force_resync causes the main loop to unconditionally re-apply the
+    correct state on the next iteration, resynchronizing the script with
+    Waybar's actual visual state.
+
+The observed Hyprland IPC event sequence on lid open (from socket2):
+
+    monitoradded>>eDP-1
+    monitoraddedv2>>0,eDP-1,Sharp Corporation 0x1518
+    openlayer>>waybar       <-- grace clears here, force_resync set
+    openlayer>>wallpaper
+    moveworkspace>>2,DVI-I-1
+    moveworkspace>>1,DVI-I-1
+
+openlayer>>waybar fires before workspaces have migrated, so at the moment
+grace clears, windows are still on the new output. The overlap check correctly
+returns HIDDEN, the force resync fires the signal, and by the time workspaces
+settle the bar is already in the right state.
+
+IPC SOCKET RESILIENCE
+---------------------
+The socket path includes HYPRLAND_INSTANCE_SIGNATURE, which changes if
+Hyprland restarts. get_hyprland_socket2() is called inside the reconnect loop
+(not once at startup) so the thread automatically picks up the new socket path
+after a Hyprland restart without requiring a restart of this script.
+
+ENVIRONMENT VARIABLES
+---------------------
+  WAYBAR_AUTOHIDE_BAR_HEIGHT       px height of the bar (default: 50)
+  WAYBAR_AUTOHIDE_HEIGHT_THRESHOLD extra px below bar to trigger hide (default: 20)
+  WAYBAR_AUTOHIDE_PROCNAME         process name to signal (default: waybar)
+  WAYBAR_AUTOHIDE_REFRESH_RATE     poll interval in seconds (default: 0.25)
+  WAYBAR_AUTOHIDE_MONITORS         comma-separated monitor IDs to track;
+                                   empty = all monitors (default: empty)
+
+LOGGING
+-------
+Logs to ~/.local/state/waybar-autohide.log at INFO level.
+"""
 
 import json
 import logging
@@ -37,9 +126,16 @@ log = logging.getLogger(__name__)
 # Global for graceful shutdown
 running = True
 
-# Grace period: don't hide waybar until this flag is cleared.
-# Set when monitoradded fires, cleared when Hyprland confirms Waybar has
-# opened its layer surface on the new output (openlayer>>waybar event).
+# Grace period state — see module docstring for full explanation.
+#
+# _monitor_grace: True while we're waiting for Waybar to open its layer on a
+#   newly-added monitor. Prevents the main loop from hiding Waybar during the
+#   window where Hyprland's solitary optimization would cause a blank screen.
+#
+# _force_resync: set to True when grace clears (openlayer>>waybar). Causes the
+#   main loop to re-send the hide/show signal unconditionally once, recovering
+#   from any desync between the script's internal state and Waybar's actual
+#   visual state that may have occurred while Waybar restarted during grace.
 _monitor_grace: bool = False
 _grace_lock = threading.Lock()
 _force_resync: bool = False
@@ -76,7 +172,13 @@ def consume_force_resync() -> bool:
 
 
 def get_hyprland_socket2() -> Optional[Path]:
-    """Find the Hyprland IPC socket2 path."""
+    """
+    Find the Hyprland IPC event socket (socket2) path.
+
+    The path is derived from HYPRLAND_INSTANCE_SIGNATURE, which is unique per
+    Hyprland session. Called on every reconnect attempt so that a Hyprland
+    restart (new signature, new socket path) is handled automatically.
+    """
     sig = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
     if not sig:
         return None
@@ -94,9 +196,14 @@ def get_hyprland_socket2() -> Optional[Path]:
 
 def monitor_ipc_events():
     """
-    Background thread: connect to Hyprland's event socket2 and listen for
-    'monitoradded' events. When one fires, set a grace period so the main
-    loop won't hide Waybar until Hyprland has fully composited the new output.
+    Background thread: stream Hyprland IPC events from socket2 and manage the
+    grace period around monitor add/remove events.
+
+    Relevant events handled:
+      monitoradded / monitoraddedv2 — a new output was connected or enabled
+        (e.g. laptop lid opened, external monitor plugged in). Starts grace.
+      openlayer>>waybar — Waybar has opened its layer surface on the new output.
+        Ends grace and sets force_resync.
 
     The socket path is re-resolved on every reconnection attempt so that if
     Hyprland restarts (new HYPRLAND_INSTANCE_SIGNATURE), the thread picks up
@@ -231,6 +338,7 @@ def set_waybar_visibility(state: WaybarState):
 
 
 def get_current_workspace() -> list[int]:
+    """Return the active workspace ID for every active monitor."""
     try:
         workspaces = subprocess.check_output(
             "hyprctl monitors -j | jq '.[] | .activeWorkspace.id'",
@@ -244,6 +352,7 @@ def get_current_workspace() -> list[int]:
 
 
 def get_monitor_from_position(pos_x: int, pos_y: int) -> Optional[int]:
+    """Return the monitor ID that contains the given screen coordinates."""
     try:
         monitors = json.loads(subprocess.check_output(
             ["hyprctl", "-j", "monitors"],
@@ -270,6 +379,7 @@ def get_monitor_from_position(pos_x: int, pos_y: int) -> Optional[int]:
 def get_clients(
     filter_func: Callable[[HyprlandClient], bool] | None = None,
 ) -> Iterator[HyprlandClient]:
+    """Yield all Hyprland clients, optionally filtered."""
     try:
         raw_clients = json.loads(subprocess.check_output(
             ["hyprctl", "-j", "clients"],
@@ -291,6 +401,12 @@ def get_overlapping_clients(
     active_workspaces: list[int],
     monitors: list[int] | None = None,
 ) -> Iterator[HyprlandClient]:
+    """
+    Yield clients whose top edge is within (BAR_HEIGHT + HEIGHT_THRESHOLD) px
+    of y=0, meaning they overlap or nearly overlap the bar area.
+
+    Skips unmapped, hidden, fullscreen, and off-workspace clients.
+    """
     def overlaps_bar(c: HyprlandClient) -> bool:
         if not c.mapped:
             return False
@@ -318,6 +434,7 @@ def window_overlaps_bar(
 
 
 def get_cursor_position() -> Optional[Tuple[int, int]]:
+    """Return the current cursor position as (x, y), or None on failure."""
     try:
         output = subprocess.check_output(
             ["hyprctl", "cursorpos"],
@@ -334,6 +451,14 @@ def get_cursor_position() -> Optional[Tuple[int, int]]:
 def cursor_aproaches_bar(
     monitors: list[int] | None, current_state: WaybarState
 ) -> bool:
+    """
+    Return True if the cursor is close enough to the top of a tracked monitor
+    to trigger the bar to show.
+
+    When the bar is visible, the threshold is BAR_HEIGHT (cursor must be within
+    the bar itself). When hidden, the threshold is 0 (cursor must be at y=0,
+    i.e. the very top pixel) to avoid accidental triggers.
+    """
     pos = get_cursor_position()
     if pos is None:
         return False
@@ -351,6 +476,15 @@ def cursor_aproaches_bar(
 def get_next_state(
     waybar_monitors: list[int], current_state: WaybarState
 ) -> WaybarState:
+    """
+    Compute the desired Waybar visibility state.
+
+    Priority order:
+      1. Grace period active → VISIBLE (protect against blank screen on monitor add)
+      2. Cursor near top of screen → VISIBLE
+      3. Window overlaps bar area → HIDDEN
+      4. Otherwise → VISIBLE
+    """
     # During grace period after a monitor is added, keep waybar visible so
     # Hyprland has time to fully composite the new output before we collapse
     # the layer surface (which would otherwise trigger a blank screen).
@@ -385,8 +519,10 @@ def main():
     else:
         waybar_monitors = []
 
-    # State tracking for cursor detection (bar height changes based on visibility)
-    state: WaybarState = WaybarState.VISIBLE  # waybar starts visible
+    # State tracks what visibility signal was last sent to Waybar. Used to
+    # avoid redundant signals and to detect when the bar needs to change state.
+    # Initialised to VISIBLE because Waybar starts visible on launch.
+    state: WaybarState = WaybarState.VISIBLE
 
     refresh_rate = float(os.environ.get("WAYBAR_AUTOHIDE_REFRESH_RATE", "0.25"))
 
@@ -394,7 +530,8 @@ def main():
         log.error("Hyprland is not running. Exiting.")
         return
 
-    # Start IPC event listener thread for monitoradded grace period
+    # Start IPC event listener thread for monitoradded grace period.
+    # Daemon thread so it doesn't block process exit.
     ipc_thread = threading.Thread(target=monitor_ipc_events, daemon=True)
     ipc_thread.start()
 
@@ -412,20 +549,26 @@ def main():
 
     while running:
         try:
-            # Check if waybar is still running
+            # If Waybar stopped (e.g. monitor topology change caused a restart),
+            # wait for it to come back and reset state to VISIBLE since Waybar
+            # always starts visible after a restart.
             if not is_waybar_running():
                 log.warning("Waybar stopped. Waiting for restart...")
-                # Wait for waybar to come back
                 while not is_waybar_running() and running:
                     time.sleep(0.5)
                 if not running:
                     break
-                # Waybar restarted - it starts visible, resync state
                 state = WaybarState.VISIBLE
                 log.info("Waybar restarted. State reset to VISIBLE.")
                 continue
 
             next_state = get_next_state(waybar_monitors, state)
+
+            # Apply state if it changed, OR if a force resync was requested
+            # (set when the monitor grace period clears). The resync ensures
+            # we re-send the correct signal even if state hasn't changed,
+            # recovering from any desync caused by a signal being lost while
+            # Waybar was restarting mid-grace.
             if next_state != state or consume_force_resync():
                 set_waybar_visibility(next_state)  # idempotent - no desync possible
                 state = next_state
