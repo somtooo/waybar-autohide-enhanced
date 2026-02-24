@@ -6,7 +6,6 @@ import os
 import signal
 import socket
 import subprocess
-import sys
 import threading
 import time
 from dataclasses import dataclass, fields
@@ -18,7 +17,6 @@ from typing import Callable, Iterator, List, Optional, Tuple
 BAR_HEIGHT = int(os.getenv("WAYBAR_AUTOHIDE_BAR_HEIGHT", "50"))
 HEIGHT_THRESHOLD = int(os.getenv("WAYBAR_AUTOHIDE_HEIGHT_THRESHOLD", "20"))
 WAYBAR_PROC = os.getenv("WAYBAR_AUTOHIDE_PROCNAME", "waybar")
-MONITOR_GRACE_PERIOD = float(os.getenv("WAYBAR_AUTOHIDE_MONITOR_GRACE", "2.0"))
 SUBPROCESS_TIMEOUT = 5  # seconds
 WAYBAR_WAIT_TIMEOUT = 60  # seconds to wait for waybar at startup
 LOG_FILE = Path.home() / ".local" / "state" / "waybar-autohide.log"
@@ -39,23 +37,30 @@ log = logging.getLogger(__name__)
 # Global for graceful shutdown
 running = True
 
-# Grace period: don't hide waybar until this timestamp has passed.
-# Set whenever a monitoradded event is received so Hyprland has time to
-# fully composite the new output before we collapse the layer surface.
-_grace_until: float = 0.0
+# Grace period: don't hide waybar until this flag is cleared.
+# Set when monitoradded fires, cleared when Hyprland confirms Waybar has
+# opened its layer surface on the new output (openlayer>>waybar event).
+_monitor_grace: bool = False
 _grace_lock = threading.Lock()
 
 
 def set_monitor_grace():
-    global _grace_until
+    global _monitor_grace
     with _grace_lock:
-        _grace_until = time.time() + MONITOR_GRACE_PERIOD
-    log.info(f"monitoradded: grace period set for {MONITOR_GRACE_PERIOD}s")
+        _monitor_grace = True
+    log.info("monitoradded: grace period started, waiting for waybar layer")
+
+
+def clear_monitor_grace():
+    global _monitor_grace
+    with _grace_lock:
+        _monitor_grace = False
+    log.info("openlayer>>waybar: grace period cleared, resuming autohide")
 
 
 def in_grace_period() -> bool:
     with _grace_lock:
-        return time.time() < _grace_until
+        return _monitor_grace
 
 
 def get_hyprland_socket2() -> Optional[Path]:
@@ -113,6 +118,8 @@ def monitor_ipc_events():
                                 monitor_name = line.split(">>", 1)[1]
                                 log.info(f"monitoradded event: {monitor_name}")
                                 set_monitor_grace()
+                            elif line.startswith("openlayer>>waybar"):
+                                clear_monitor_grace()
                     except socket.timeout:
                         continue
         except Exception as e:
