@@ -42,6 +42,7 @@ running = True
 # opened its layer surface on the new output (openlayer>>waybar event).
 _monitor_grace: bool = False
 _grace_lock = threading.Lock()
+_force_resync: bool = False
 
 
 def set_monitor_grace():
@@ -52,15 +53,26 @@ def set_monitor_grace():
 
 
 def clear_monitor_grace():
-    global _monitor_grace
+    global _monitor_grace, _force_resync
     with _grace_lock:
         _monitor_grace = False
+        _force_resync = True
     log.info("openlayer>>waybar: grace period cleared, resuming autohide")
 
 
 def in_grace_period() -> bool:
     with _grace_lock:
         return _monitor_grace
+
+
+def consume_force_resync() -> bool:
+    """Returns True (and clears the flag) if a resync was requested."""
+    global _force_resync
+    with _grace_lock:
+        if _force_resync:
+            _force_resync = False
+            return True
+        return False
 
 
 def get_hyprland_socket2() -> Optional[Path]:
@@ -414,7 +426,7 @@ def main():
                 continue
 
             next_state = get_next_state(waybar_monitors, state)
-            if next_state != state:
+            if next_state != state or consume_force_resync():
                 set_waybar_visibility(next_state)  # idempotent - no desync possible
                 state = next_state
 
