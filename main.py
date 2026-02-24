@@ -80,18 +80,22 @@ def monitor_ipc_events():
     Background thread: connect to Hyprland's event socket2 and listen for
     'monitoradded' events. When one fires, set a grace period so the main
     loop won't hide Waybar until Hyprland has fully composited the new output.
+
+    The socket path is re-resolved on every reconnection attempt so that if
+    Hyprland restarts (new HYPRLAND_INSTANCE_SIGNATURE), the thread picks up
+    the new socket automatically rather than hammering a stale path.
     """
     global running
 
-    sock_path = get_hyprland_socket2()
-    if sock_path is None:
-        log.warning("Could not find Hyprland socket2 — monitor grace period disabled")
-        return
-
-    log.info(f"Listening for Hyprland IPC events on {sock_path}")
-
     while running:
+        sock_path = get_hyprland_socket2()
+        if sock_path is None:
+            log.warning("Could not find Hyprland socket2 — retrying in 2s...")
+            time.sleep(2)
+            continue
+
         try:
+            log.info(f"Listening for Hyprland IPC events on {sock_path}")
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
                 sock.connect(str(sock_path))
                 sock.settimeout(1.0)
