@@ -1,6 +1,6 @@
-# Omarchy Bar Autohide
+# Omarchy Quattro Bar Autohide
 
-A lightweight Python script that automatically hides and shows the [Omarchy](https://omarchy.org/) status bar (Quickshell-based, Omarchy 4+) based on window overlap and cursor position in [Hyprland](https://hyprland.org/), with robust handling for monitor hotplug and laptop lid events.
+A lightweight Python script that automatically hides and shows the [Omarchy](https://omarchy.org/) Quattro status bar (Quickshell-based) based on window overlap and cursor position in [Hyprland](https://hyprland.org/), with robust handling for monitor hotplug and laptop lid events.
 
 ## Features
 
@@ -14,7 +14,7 @@ A lightweight Python script that automatically hides and shows the [Omarchy](htt
 
 ## Requirements
 
-- Omarchy 4+ (the Quickshell-based `omarchy-shell` bar)
+- Omarchy 4 "Quattro" (the Quickshell-based `omarchy-shell` bar)
 - Python >= 3.12
 - Hyprland window manager (`hyprctl`)
 - `jq`
@@ -34,7 +34,7 @@ make install INSTALL_PATH=/usr/local/bin
 Simply run the script:
 
 ```bash
-omarchy-bar-autohide
+quattrobar-autohide
 ```
 
 ### Recommended Usage
@@ -42,25 +42,25 @@ omarchy-bar-autohide
 Omarchy configures Hyprland in Lua. Add to `~/.config/hypr/autostart.lua`:
 
 ```lua
-o.launch_on_start("omarchy-bar-autohide")
+o.launch_on_start("quattrobar-autohide")
 ```
 
 ### Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OMARCHY_BAR_AUTOHIDE_MONITORS` | Comma-separated list of monitor IDs to enable auto-hide (e.g., `0,1`) | All monitors |
-| `OMARCHY_BAR_AUTOHIDE_REFRESH_RATE` | Polling interval in seconds | `0.25` |
-| `OMARCHY_BAR_AUTOHIDE_BAR_HEIGHT` | Height of the bar in pixels | `26` |
-| `OMARCHY_BAR_AUTOHIDE_HEIGHT_THRESHOLD` | Additional threshold for overlap detection in pixels | `20` |
+| `QUATTROBAR_AUTOHIDE_MONITORS` | Comma-separated list of monitor IDs to enable auto-hide (e.g., `0,1`) | All monitors |
+| `QUATTROBAR_AUTOHIDE_REFRESH_RATE` | Polling interval in seconds | `0.25` |
+| `QUATTROBAR_AUTOHIDE_BAR_HEIGHT` | Height of the bar in pixels | `26` |
+| `QUATTROBAR_AUTOHIDE_HEIGHT_THRESHOLD` | Additional threshold for overlap detection in pixels | `20` |
 
 ### Example
 
 ```bash
 # Enable auto-hide only on monitor 0, with faster refresh
-OMARCHY_BAR_AUTOHIDE_MONITORS=0 \
-OMARCHY_BAR_AUTOHIDE_REFRESH_RATE=0.25 \
-omarchy-bar-autohide
+QUATTROBAR_AUTOHIDE_MONITORS=0 \
+QUATTROBAR_AUTOHIDE_REFRESH_RATE=0.25 \
+quattrobar-autohide
 ```
 
 ## How It Works

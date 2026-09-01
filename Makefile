@@ -1,6 +1,6 @@
 INSTALL_PATH ?= ~/.local/bin
-SCRIPT := omarchy-bar-autohide
-SCRIPT_TARGET := omarchy-bar-autohide
+SCRIPT := quattrobar-autohide
+SCRIPT_TARGET := quattrobar-autohide
 
 
 DEV_DEPENDENCIES := \

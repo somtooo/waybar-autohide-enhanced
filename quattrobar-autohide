@@ -1,15 +1,15 @@
 #!/usr/bin/env python
 """
-omarchy-bar-autohide — Hyprland autohide controller for the Omarchy bar
-========================================================================
+quattrobar-autohide — Hyprland autohide controller for the Omarchy Quattro bar
+===============================================================================
 
-Hides the Omarchy Quickshell bar when a window overlaps the bar area, shows
-it when the cursor reaches the top edge or no window overlaps. Designed for
-Omarchy 4+ (Quickshell-based bar) on Hyprland.
+Hides the Omarchy Quattro (Quickshell) bar when a window overlaps the bar
+area, shows it when the cursor reaches the top edge or no window overlaps.
+Designed for Omarchy 4 "Quattro" on Hyprland.
 
 HOW IT WORKS
 ------------
-The main loop polls Hyprland every OMARCHY_BAR_AUTOHIDE_REFRESH_RATE seconds
+The main loop polls Hyprland every QUATTROBAR_AUTOHIDE_REFRESH_RATE seconds
 and computes the desired bar state (VISIBLE or HIDDEN) from two signals:
 
   1. Cursor proximity: if the cursor is within BAR_HEIGHT px of the top of
@@ -60,15 +60,15 @@ script.
 
 ENVIRONMENT VARIABLES
 ---------------------
-  OMARCHY_BAR_AUTOHIDE_BAR_HEIGHT       px height of the bar (default: 26)
-  OMARCHY_BAR_AUTOHIDE_HEIGHT_THRESHOLD extra px below bar to trigger hide (default: 20)
-  OMARCHY_BAR_AUTOHIDE_REFRESH_RATE     poll interval in seconds (default: 0.25)
-  OMARCHY_BAR_AUTOHIDE_MONITORS         comma-separated monitor IDs to track;
+  QUATTROBAR_AUTOHIDE_BAR_HEIGHT       px height of the bar (default: 26)
+  QUATTROBAR_AUTOHIDE_HEIGHT_THRESHOLD extra px below bar to trigger hide (default: 20)
+  QUATTROBAR_AUTOHIDE_REFRESH_RATE     poll interval in seconds (default: 0.25)
+  QUATTROBAR_AUTOHIDE_MONITORS         comma-separated monitor IDs to track;
                                         empty = all monitors (default: empty)
 
 LOGGING
 -------
-Logs to /tmp/omarchy-bar-autohide.log at INFO level.
+Logs to /tmp/quattrobar-autohide.log at INFO level.
 """
 
 import json
@@ -85,12 +85,12 @@ from pathlib import Path
 from typing import Callable, Iterator, List, Optional, Tuple
 
 
-BAR_HEIGHT = int(os.getenv("OMARCHY_BAR_AUTOHIDE_BAR_HEIGHT", "26"))
-HEIGHT_THRESHOLD = int(os.getenv("OMARCHY_BAR_AUTOHIDE_HEIGHT_THRESHOLD", "20"))
+BAR_HEIGHT = int(os.getenv("QUATTROBAR_AUTOHIDE_BAR_HEIGHT", "26"))
+HEIGHT_THRESHOLD = int(os.getenv("QUATTROBAR_AUTOHIDE_HEIGHT_THRESHOLD", "20"))
 SUBPROCESS_TIMEOUT = 5  # seconds
 SHELL_WAIT_TIMEOUT = 60  # seconds to wait for the shell at startup
 BAR_OFF_FLAG = Path.home() / ".local" / "state" / "omarchy" / "toggles" / "bar-off"
-LOG_FILE = Path("/tmp/omarchy-bar-autohide.log")
+LOG_FILE = Path("/tmp/quattrobar-autohide.log")
 
 
 # Setup logging
@@ -497,14 +497,14 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
 
-    bar_monitors = os.environ.get("OMARCHY_BAR_AUTOHIDE_MONITORS", None)
+    bar_monitors = os.environ.get("QUATTROBAR_AUTOHIDE_MONITORS", None)
     if bar_monitors is not None:
         bar_monitors = bar_monitors.split(",")
         bar_monitors = [int(m.strip()) for m in bar_monitors if m.strip()]
     else:
         bar_monitors = []
 
-    refresh_rate = float(os.environ.get("OMARCHY_BAR_AUTOHIDE_REFRESH_RATE", "0.25"))
+    refresh_rate = float(os.environ.get("QUATTROBAR_AUTOHIDE_REFRESH_RATE", "0.25"))
 
     if not is_hyprland_running():
         log.error("Hyprland is not running. Exiting.")
