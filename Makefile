@@ -1,6 +1,6 @@
 INSTALL_PATH ?= ~/.local/bin
-SCRIPT := main.py
-SCRIPT_TARGET := waybar-autohide
+SCRIPT := omarchy-bar-autohide
+SCRIPT_TARGET := omarchy-bar-autohide
 
 
 DEV_DEPENDENCIES := \
